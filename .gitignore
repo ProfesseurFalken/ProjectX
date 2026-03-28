@@ -1,0 +1,40 @@
+# =============================================================================
+# ProjectX - .gitignore
+# =============================================================================
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# --- Virtual Environment ---
+.venv/
+venv/
+ENV/
+
+# --- Données persistantes (générées au runtime) ---
+data/
+*.sqlite
+*.sqlite3
+
+# --- IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- OS ---
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# --- Playwright browsers ---
+playwright/
+
+# --- Divers ---
+*.log
+.env
