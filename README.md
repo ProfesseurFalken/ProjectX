@@ -1,10 +1,10 @@
-# 🤖 ProjectX — Joshua
+# ProjectX — Joshua
 
 **Agent AI 100% local, autonome et auto-apprenant.**
 
 Joshua est un assistant AI qui tourne entièrement en local via [Ollama](https://ollama.com/), sans clé API ni service cloud. Il dispose d'un accès web complet, d'outils de gestion de fichiers, d'exécution de code, et d'un système de mémoire persistante avec auto-apprentissage.
 
-## ✨ Fonctionnalités
+## Fonctionnalités
 
 - **100% local** — Fonctionne avec Ollama (qwen2.5:14b + 7b), aucune donnée ne quitte votre machine
 - **Accès web complet** — Recherche DuckDuckGo, scraping, navigation automatisée (Playwright)
@@ -19,13 +19,13 @@ Joshua est un assistant AI qui tourne entièrement en local via [Ollama](https:/
 - **Streaming** — Réponses affichées token par token en temps réel
 - **Interface web** — Chat via [Chainlit](https://chainlit.io/)
 
-## 📋 Prérequis
+## Prérequis
 
 - **Python 3.11+**
 - **[Ollama](https://ollama.com/)** installé et en fonctionnement
 - **Windows 10/11** (testé), Linux/macOS (devrait fonctionner)
 
-## 🚀 Installation
+## Installation
 
 ```bash
 # 1. Cloner le repo
@@ -49,7 +49,7 @@ ollama pull qwen2.5:7b
 ollama pull nomic-embed-text
 ```
 
-## ▶️ Lancement
+## Lancement
 
 ```bash
 # Démarrer Ollama (si pas déjà lancé)
@@ -66,7 +66,7 @@ Ou utiliser le script de démarrage :
 start.bat
 ```
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 ProjectX/
@@ -110,7 +110,7 @@ ProjectX/
                                      └→ agent [reflect] [END]
 ```
 
-## ⚙️ Configuration
+## Configuration
 
 Tous les paramètres sont dans `config.py` et modifiables via variables d'environnement :
 
@@ -123,11 +123,11 @@ Tous les paramètres sont dans `config.py` et modifiables via variables d'enviro
 | `SUMMARIZE_THRESHOLD` | `30` | Seuil de compression |
 | `RAG_DOCUMENTS_DIR` | `data/documents` | Dossier pour le RAG |
 
-## 📧 Contact
+## Contact
 
 - **Auteur** : ProfesseurFalken
 - **Email** : wojcikej@orange.fr
 
-## 📄 Licence
+## Licence
 
 Ce projet est sous licence MIT.
