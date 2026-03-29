@@ -1,35 +1,37 @@
 """
-ProjectX - Graphe Agent LangGraph (Cœur du système)
+ProjectX - Graphe Agent LangGraph Multi-Agents (Cœur du système)
 Ce module définit le graphe d'exécution principal de l'agent AI.
-Il orchestre la boucle de raisonnement ReAct enrichie avec mémoire
-et auto-apprentissage.
+Il orchestre une architecture multi-agents avec routage intelligent
+vers des spécialistes (Research, Coder, System, Memory).
 
 Le graphe suit ce flux :
-    1. RECALL   → Charge les apprentissages pertinents de la mémoire long-terme
-    2. AGENT    → Le LLM raisonne et décide quelle action prendre
-    3. TOOLS    → Exécute l'outil sélectionné par le LLM
-    4. DECIDE   → Le LLM a-t-il fini ? Continue-t-il ? Faut-il réfléchir ?
-    5. REFLECT  → (Périodique) Analyse les interactions, extrait des leçons
-    6. → Retour à AGENT ou FIN
+    1. RECALL        → Charge les apprentissages pertinents
+    2. SUMMARIZE     → Compresse l'historique si trop long
+    3. ORCHESTRATOR  → Route vers le spécialiste approprié
+    4. AGENT         → Le spécialiste raisonne avec ses outils dédiés
+    5. TOOLS         → Exécute l'outil sélectionné
+    6. CHECK_REFLECT → Faut-il réfléchir ?
+    7. REFLECT       → (Périodique) Extrait des leçons
+    8. → Retour à AGENT ou FIN
 
 Diagramme du graphe :
 
     [START]
        ↓
-    [recall] ──→ [agent] ←──────────────────────┐
-                    ↓                            │
-              tool_calls ?                       │
-              ↓ OUI     ↓ NON                    │
-           [tools]    [check_reflect]            │
-              ↓           ↓ reflect   ↓ skip     │
-              └──→ [agent] [reflect]  [END]      │
-                              ↓                  │
-                           [END]                 │
+    [recall] → [summarize] → [orchestrator] → [agent] ←────┐
+                                                 ↓          │
+                                           tool_calls ?     │
+                                          ↓ OUI   ↓ NON    │
+                                       [tools] [check_reflect]
+                                          ↓      ↓ reflect  ↓ skip
+                                          └─→ [agent] [reflect]  [END]
+                                                          ↓
+                                                       [END]
 
 Auteur  : ProfesseurFalken
 Contact : wojcikej@orange.fr
 GitHub  : https://github.com/ProfesseurFalken/ProjectX
-Date    : 2026-03-28
+Date    : 2026-03-29
 """
 
 from typing import TypedDict, Annotated, Sequence, Optional, AsyncIterator
@@ -54,7 +56,8 @@ from tools import ALL_TOOLS
 from agent.memory import get_checkpointer, get_memory_store
 from agent.learning import recall_memories, reflect_on_interactions, should_reflect
 from agent.summarizer import should_summarize, summarize_conversation
-from agent.planner import planner_node
+from agent.orchestrator import orchestrator_node
+from agent.specialists import SPECIALISTS
 
 
 # =============================================================================
@@ -86,6 +89,9 @@ class AgentState(TypedDict):
     # Compteur pour la réflexion périodique
     interaction_count: int
 
+    # Spécialiste sélectionné par l'orchestrateur pour ce tour
+    current_specialist: str
+
 
 # =============================================================================
 # NOEUDS DU GRAPHE
@@ -96,14 +102,14 @@ class AgentState(TypedDict):
 _memory_store: Optional[InMemoryStore] = None
 
 
-def _get_llm(model: str | None = None):
+def _get_llm(model: str | None = None, tools: list | None = None):
     """Crée et retourne une instance du LLM Ollama configurée avec les outils.
 
-    Supporte le routage multi-modèles : par défaut utilise OLLAMA_MODEL
-    (qwen2.5:14b), mais peut utiliser un modèle alternatif.
+    Supporte le routage multi-modèles et les outils spécialisés.
 
     Args:
         model: Nom du modèle Ollama à utiliser. Si None, utilise OLLAMA_MODEL.
+        tools: Liste d'outils à lier au LLM. Si None, utilise ALL_TOOLS.
 
     Returns:
         Instance ChatOllama avec les outils liés, prête à être invoquée.
@@ -116,7 +122,8 @@ def _get_llm(model: str | None = None):
         repeat_penalty=1.2,
     )
 
-    llm_with_tools = llm.bind_tools(ALL_TOOLS)
+    bound_tools = tools if tools is not None else ALL_TOOLS
+    llm_with_tools = llm.bind_tools(bound_tools)
 
     return llm_with_tools
 
@@ -210,14 +217,12 @@ async def summarize_node(state: AgentState) -> dict:
 async def agent_node(state: AgentState) -> dict:
     """Noeud AGENT : le LLM raisonne et décide de l'action à prendre.
 
-    C'est le noeud central du graphe. Il :
-    1. Construit le prompt système avec les apprentissages rappelés
-    2. Filtre et limite les messages pour rester dans la fenêtre contexte
-    3. Envoie les messages au LLM
-    4. Incrémente le compteur d'interactions
+    Utilise le spécialiste sélectionné par l'orchestrateur pour réduire
+    le nombre d'outils visibles par le LLM, améliorant la précision
+    du tool-calling.
 
     Args:
-        state: L'état complet du graphe (messages, mémoire, compteur).
+        state: L'état complet du graphe (messages, mémoire, compteur, spécialiste).
 
     Returns:
         L'état mis à jour avec la réponse du LLM ajoutée aux messages
@@ -225,34 +230,36 @@ async def agent_node(state: AgentState) -> dict:
     """
     from langchain_core.messages import ToolMessage
 
+    # --- Sélection du spécialiste ---
+    specialist_key = state.get("current_specialist", "general")
+    specialist = SPECIALISTS.get(specialist_key, SPECIALISTS["general"])
+    specialist_tools = specialist["tools"]  # None = ALL_TOOLS
+    specialist_prompt = specialist["prompt"]
+
     # --- Construction du prompt système ---
     recalled = state.get("recalled_memories", "")
-    system_prompt = SYSTEM_PROMPT.format(recalled_memories=recalled)
+    base_prompt = SYSTEM_PROMPT.format(recalled_memories=recalled)
+    # Injecter la directive du spécialiste
+    system_prompt = f"{base_prompt}\n\n[RÔLE ACTIF : {specialist['name']}]\n{specialist_prompt}"
 
     # --- Préparation des messages pour le LLM ---
     raw_messages = list(state["messages"])
 
     # FILTRE 1 : Ne garder que les types supportés par Ollama
-    # (SystemMessage, HumanMessage, AIMessage, ToolMessage)
     supported_types = (SystemMessage, HumanMessage, AIMessage, ToolMessage)
     filtered = [m for m in raw_messages if isinstance(m, supported_types)]
 
-    # FILTRE 2 : Limiter le contexte pour ne pas dépasser la fenêtre Ollama
-    # On garde les 30 derniers messages (environ 20K tokens max).
-    # Cela évite les réponses vides quand le contexte est trop long.
+    # FILTRE 2 : Limiter le contexte (30 messages max)
     MAX_CONTEXT_MESSAGES = 30
     if len(filtered) > MAX_CONTEXT_MESSAGES:
         filtered = filtered[-MAX_CONTEXT_MESSAGES:]
-        # S'assurer qu'on ne coupe pas au milieu d'un échange outil
-        # (un ToolMessage doit toujours être précédé d'un AIMessage avec tool_calls)
         while filtered and isinstance(filtered[0], ToolMessage):
             filtered = filtered[1:]
 
-    # Le prompt système est toujours le premier message
     all_messages = [SystemMessage(content=system_prompt)] + filtered
 
-    # --- Invocation async du LLM ---
-    llm = _get_llm()
+    # --- Invocation async du LLM avec outils du spécialiste ---
+    llm = _get_llm(tools=specialist_tools)
     response = await llm.ainvoke(all_messages)
 
     # --- Mise à jour de l'état ---
@@ -365,8 +372,8 @@ async def create_agent_graph() -> tuple:
     # Noeud SUMMARIZE : compression de l'historique si nécessaire
     builder.add_node("summarize", summarize_node)
 
-    # Noeud PLANNER : décomposition des tâches complexes
-    builder.add_node("planner", planner_node)
+    # Noeud ORCHESTRATOR : route vers le spécialiste approprié
+    builder.add_node("orchestrator", orchestrator_node)
 
     # Noeud AGENT : raisonnement du LLM (cœur de la boucle ReAct)
     builder.add_node("agent", agent_node)
@@ -388,11 +395,11 @@ async def create_agent_graph() -> tuple:
     # recall → summarize : après le rappel, compresser si nécessaire
     builder.add_edge("recall", "summarize")
 
-    # summarize → planner : après compression, analyser la complexité
-    builder.add_edge("summarize", "planner")
+    # summarize → orchestrator : après compression, router vers le spécialiste
+    builder.add_edge("summarize", "orchestrator")
 
-    # planner → agent : après planification, passer au raisonnement
-    builder.add_edge("planner", "agent")
+    # orchestrator → agent : après routage, passer au raisonnement
+    builder.add_edge("orchestrator", "agent")
 
     # agent → tools OU check_reflect : selon que le LLM veut un outil ou non
     builder.add_conditional_edges(

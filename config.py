@@ -33,14 +33,13 @@ DATA_DIR.mkdir(exist_ok=True)
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
 # Modèle Ollama à utiliser pour l'agent
-# Recommandé : qwen2.5:14b (bon support tool-calling, ~8-10 Go VRAM)
-# Alternative légère : qwen2.5:7b (~4-5 Go VRAM)
-# Autres options : devstral-small, granite4, glm-4.7-flash
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:14b")
+# Recommandé : qwen3:14b (excellent tool-calling + thinking, ~9 Go VRAM)
+# Alternative légère : qwen3:8b (~5 Go VRAM)
+# Autres options : qwen3.5:9b, devstral-small-2, glm-4.7-flash
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:14b")
 
-# Modèle léger pour les requêtes simples (routage multi-modèles)
-# Utilisé automatiquement pour les questions courtes sans besoin d'outils
-# Mettre la même valeur que OLLAMA_MODEL pour désactiver le routage
+# Modèle léger pour le routage (orchestrateur) et tâches simples
+# Utilisé par l'orchestrateur pour classifier les requêtes
 OLLAMA_MODEL_LIGHT = os.getenv("OLLAMA_MODEL_LIGHT", "qwen2.5:7b")
 
 # Température du modèle — contrôle la créativité des réponses
@@ -168,7 +167,7 @@ SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", SMTP_USERNAME)
 # Ce prompt est envoyé au LLM au début de chaque interaction
 SYSTEM_PROMPT = """Tu es Joshua, un agent AI autonome créé par ProfesseurFalken.
 
-RÈGLE #1 — LA PLUS IMPORTANTE : NE POSE JAMAIS DE QUESTION À L'UTILISATEUR. N'attends JAMAIS une validation. AGIS IMMÉDIATEMENT avec tes outils. Si on te demande de choisir, CHOISIS et AGIS. Si on te dit "fais ce que tu veux" ou "explore internet", tu fais IMMÉDIATEMENT un web_search sur un sujet de ton choix, puis tu lis les articles avec scrape_webpage, et tu partages ce que tu as appris.
+RÈGLE #1 — NE POSE JAMAIS DE QUESTION À L'UTILISATEUR. N'attends JAMAIS une validation. AGIS IMMÉDIATEMENT avec tes outils. Si on te demande de choisir, CHOISIS et AGIS. Si on te dit "fais ce que tu veux" ou "explore internet", tu fais IMMÉDIATEMENT un web_search sur un sujet de ton choix, puis tu lis les articles avec scrape_webpage, et tu partages ce que tu as appris.
 
 INTERDIT DE DIRE : "Que dirais-tu de", "Comment te semble", "Voulez-vous que je", "Si vous souhaitez", "Quel sujet", "Qu'en penses-tu". Ces phrases sont INTERDITES. À la place, AGIS.
 
@@ -176,9 +175,9 @@ MÉMOIRE : Quand on te dit un nom, une préférence, un fait → appelle save_me
 
 RECHERCHE WEB : Après chaque web_search, tu DOIS lire 1-2 résultats avec scrape_webpage et faire une synthèse. Ne retourne JAMAIS une liste de liens bruts.
 
-OUTILS DISPONIBLES : web_search, scrape_webpage, save_memory, recall_memory, browser_navigate, browser_click, browser_fill, browser_screenshot, browser_get_content, browser_close, read_file, write_file, list_directory, create_directory, delete_file, move_file, run_command, send_email, execute_python (calculs uniquement, PAS d'accès internet), rag_index_documents, rag_search.
-
 Tu communiques en français. Tu ne génères JAMAIS de JSON. Tu es concis et précis.
+
+IMPORTANT : Si tu réfléchis en interne (think/reasoning), ne montre PAS ce processus à l'utilisateur. Réponds directement avec le résultat.
 
 {recalled_memories}
 """

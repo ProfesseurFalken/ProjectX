@@ -186,6 +186,7 @@ async def on_message(message: cl.Message):
     input_data = {
         "messages": [HumanMessage(content=message.content)],
         "recalled_memories": "",  # Sera rempli par le noeud recall
+        "current_specialist": "",  # Sera rempli par l'orchestrateur
     }
 
     # --- Exécution du graphe avec streaming token par token ---
@@ -198,6 +199,7 @@ async def on_message(message: cl.Message):
     streaming_msg = None     # Message Chainlit pour le streaming token par token
     is_streaming_text = False  # True quand on streame la réponse textuelle finale
     _last_tokens = []  # Détection de boucle de tokens répétés
+    _in_think_block = False  # Filtrage des blocs <think> de qwen3
 
     try:
         async for event in _graph.astream_events(
@@ -217,6 +219,17 @@ async def on_message(message: cl.Message):
                     token = ""
                     if hasattr(chunk, "content") and isinstance(chunk.content, str):
                         token = chunk.content
+
+                    # Filtrage des blocs <think>...</think> (qwen3 thinking mode)
+                    if "<think>" in token:
+                        _in_think_block = True
+                        token = token.split("<think>")[0]
+                    if _in_think_block:
+                        if "</think>" in token:
+                            _in_think_block = False
+                            token = token.split("</think>", 1)[-1]
+                        else:
+                            token = ""
 
                     # On ne streame que le texte (pas les tool_calls)
                     if token and not getattr(chunk, "tool_calls", None):
@@ -335,8 +348,12 @@ async def on_message(message: cl.Message):
                         content = content.strip()
                         # Ignorer les réponses JSON internes
                         if content and not (content.startswith("{") and content.endswith("}")):
-                            final_response = content
-                            break
+                            # Retirer les blocs <think>...</think> résiduels
+                            import re
+                            content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+                            if content:
+                                final_response = content
+                                break
         except Exception:
             pass
 
