@@ -84,8 +84,33 @@ async def planner_node(state: "AgentState") -> dict:
     """
     query = _get_last_user_message(dict(state))  # type: ignore[arg-type]
 
+    if not query:
+        return {}
+
+    # Détection des demandes de liberté/exploration
+    # L'utilisateur veut que l'agent agisse de manière autonome
+    _FREEDOM_KEYWORDS = [
+        "fais ce que tu veux", "libre de", "choisis toi", "choisis un sujet",
+        "explore internet", "consulte internet", "navigue sur", "apprends",
+        "améliore-toi", "ameliore-toi", "sois autonome", "prends l'initiative",
+        "fais le toi", "fais-le toi", "à toi de jouer", "a toi de jouer",
+        "ce que tu souhaites", "ce que tu veux", "comme tu veux",
+    ]
+    query_lower = query.lower()
+    if any(kw in query_lower for kw in _FREEDOM_KEYWORDS):
+        return {
+            "messages": [SystemMessage(content=(
+                "[DIRECTIVE] L'utilisateur te donne carte blanche. "
+                "Tu DOIS agir MAINTENANT sans poser de question. "
+                "Étape 1 : Appelle web_search avec un sujet de TON choix (actualité tech, science, découverte récente...). "
+                "Étape 2 : Appelle scrape_webpage sur le meilleur résultat. "
+                "Étape 3 : Fais une synthèse passionnante de ce que tu as lu. "
+                "NE DEMANDE PAS L'AVIS de l'utilisateur. AGIS."
+            ))]
+        }
+
     # Si le message est court ou vide, pas besoin de planifier
-    if not query or len(query) < 30:
+    if len(query) < 80:
         return {}
 
     # Utiliser le modèle léger pour la classification rapide

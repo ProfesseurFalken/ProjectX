@@ -41,6 +41,7 @@ from tools.system_cmd import run_command
 from tools.email_tool import send_email
 from tools.code_executor import execute_python
 from tools.rag_tool import rag_index_documents, rag_search
+from tools.memory_tool import save_memory, recall_memory
 
 # =============================================================================
 # LISTE COMPLÈTE DES OUTILS
@@ -77,4 +78,8 @@ ALL_TOOLS = [
     # --- Outils RAG (Recherche dans les fichiers locaux) ---
     rag_index_documents,    # Indexer les fichiers d'un répertoire
     rag_search,             # Rechercher dans les documents indexés
+
+    # --- Outils Mémoire Explicite ---
+    save_memory,            # Sauvegarder un fait/information en mémoire permanente
+    recall_memory,          # Retrouver des informations mémorisées
 ]

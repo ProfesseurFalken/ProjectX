@@ -181,7 +181,7 @@ def recall_memories(state, store) -> dict:
 # NOEUD REFLECTION : ANALYSE ET APPRENTISSAGE
 # =============================================================================
 
-def reflect_on_interactions(state, store) -> dict:
+async def reflect_on_interactions(state, store) -> dict:
     """Noeud REFLECTION : analyse les interactions récentes et extrait des leçons.
 
     Ce noeud est déclenché périodiquement (toutes les REFLECTION_FREQUENCY
@@ -255,8 +255,8 @@ def reflect_on_interactions(state, store) -> dict:
         # Construction du prompt avec les messages à analyser
         prompt = REFLECTION_PROMPT.format(messages=messages_text)
 
-        # Invocation du LLM pour la réflexion
-        response = reflection_llm.invoke([HumanMessage(content=prompt)])
+        # Invocation async du LLM pour la réflexion
+        response = await reflection_llm.ainvoke([HumanMessage(content=prompt)])
         response_text = response.content
         # S'assurer que response_text est une chaîne
         if not isinstance(response_text, str):

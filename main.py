@@ -197,18 +197,20 @@ async def on_message(message: cl.Message):
     pending_tool_calls = {}  # Mémorise les appels d'outils pour l'affichage
     streaming_msg = None     # Message Chainlit pour le streaming token par token
     is_streaming_text = False  # True quand on streame la réponse textuelle finale
+    _last_tokens = []  # Détection de boucle de tokens répétés
 
     try:
         async for event in _graph.astream_events(
             input_data, config, version="v2"
         ):
             event_kind = event.get("event", "")
-            tags = event.get("tags", [])
+            metadata = event.get("metadata", {})
+            langgraph_node = metadata.get("langgraph_node", "")
 
             # --- STREAMING TOKEN PAR TOKEN ---
             # Les événements on_chat_model_stream sont émis pour chaque token
             # généré par le LLM dans le noeud "agent"
-            if event_kind == "on_chat_model_stream" and "agent" in tags:
+            if event_kind == "on_chat_model_stream" and langgraph_node == "agent":
                 chunk = event.get("data", {}).get("chunk")
                 if chunk is not None:
                     # Le chunk est un AIMessageChunk avec du contenu textuel
@@ -218,6 +220,24 @@ async def on_message(message: cl.Message):
 
                     # On ne streame que le texte (pas les tool_calls)
                     if token and not getattr(chunk, "tool_calls", None):
+                        # Détection de boucle de tokens répétés
+                        _last_tokens.append(token.strip().lower())
+                        if len(_last_tokens) > 15:
+                            _last_tokens.pop(0)
+                        if (len(_last_tokens) >= 10 and
+                                len(set(_last_tokens[-10:])) <= 2):
+                            # Token en boucle détecté → couper le streaming
+                            if streaming_msg and is_streaming_text:
+                                # Retirer les tokens répétés de la réponse
+                                repeated = _last_tokens[-1]
+                                while final_response.rstrip().lower().endswith(repeated):
+                                    final_response = final_response[:final_response.lower().rfind(repeated)]
+                                streaming_msg.content = final_response.rstrip()
+                                await streaming_msg.update()
+                                streaming_msg = None
+                                is_streaming_text = False
+                            break
+
                         if streaming_msg is None:
                             # Premier token → créer le message Chainlit
                             streaming_msg = cl.Message(content="")
@@ -229,7 +249,7 @@ async def on_message(message: cl.Message):
                         final_response += token
 
             # --- FIN DU STREAMING D'UN MESSAGE COMPLET ---
-            elif event_kind == "on_chat_model_end" and "agent" in tags:
+            elif event_kind == "on_chat_model_end" and langgraph_node == "agent":
                 output = event.get("data", {}).get("output")
                 if output is not None and hasattr(output, "tool_calls") and output.tool_calls:
                     # Le LLM veut utiliser des outils → mémoriser les appels
@@ -299,6 +319,26 @@ async def on_message(message: cl.Message):
     except Exception as e:
         # En cas d'erreur du graphe, on affiche un message d'erreur clair
         final_response = f"Désolé, une erreur s'est produite : {str(e)}"
+
+    # --- Fallback : récupérer la réponse depuis l'état du graphe ---
+    # Si le streaming n'a rien capturé (final_response vide), on consulte
+    # directement le dernier état du graphe pour y trouver la réponse AI.
+    if not final_response.strip():
+        try:
+            state_snapshot = await _graph.aget_state(config)
+            if state_snapshot and state_snapshot.values:
+                msgs = state_snapshot.values.get("messages", [])
+                # Chercher le dernier AIMessage avec du contenu textuel
+                for msg in reversed(msgs):
+                    if isinstance(msg, AIMessage) and msg.content:
+                        content = msg.content if isinstance(msg.content, str) else str(msg.content)
+                        content = content.strip()
+                        # Ignorer les réponses JSON internes
+                        if content and not (content.startswith("{") and content.endswith("}")):
+                            final_response = content
+                            break
+        except Exception:
+            pass
 
     # --- Affichage de la réponse finale ---
     # Si le streaming a déjà affiché la réponse, on ne la réaffiche pas

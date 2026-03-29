@@ -113,6 +113,7 @@ def _get_llm(model: str | None = None):
         base_url=OLLAMA_BASE_URL,
         temperature=OLLAMA_TEMPERATURE,
         num_predict=OLLAMA_MAX_TOKENS,
+        repeat_penalty=1.2,
     )
 
     llm_with_tools = llm.bind_tools(ALL_TOOLS)
@@ -211,12 +212,9 @@ async def agent_node(state: AgentState) -> dict:
 
     C'est le noeud central du graphe. Il :
     1. Construit le prompt système avec les apprentissages rappelés
-    2. Envoie tous les messages au LLM (historique complet)
-    3. Reçoit la réponse du LLM (texte ou appel d'outil)
+    2. Filtre et limite les messages pour rester dans la fenêtre contexte
+    3. Envoie les messages au LLM
     4. Incrémente le compteur d'interactions
-
-    Le noeud est async pour permettre l'utilisation de ainvoke() qui
-    émet des événements de streaming capturables par astream_events().
 
     Args:
         state: L'état complet du graphe (messages, mémoire, compteur).
@@ -225,39 +223,48 @@ async def agent_node(state: AgentState) -> dict:
         L'état mis à jour avec la réponse du LLM ajoutée aux messages
         et le compteur incrémenté.
     """
+    from langchain_core.messages import ToolMessage
+
     # --- Construction du prompt système ---
-    # On insère les apprentissages rappelés dans le prompt
     recalled = state.get("recalled_memories", "")
     system_prompt = SYSTEM_PROMPT.format(recalled_memories=recalled)
 
     # --- Préparation des messages pour le LLM ---
-    # On ajoute le prompt système en premier, puis l'historique complet
-    messages = state["messages"]
+    raw_messages = list(state["messages"])
+
+    # FILTRE 1 : Ne garder que les types supportés par Ollama
+    # (SystemMessage, HumanMessage, AIMessage, ToolMessage)
+    supported_types = (SystemMessage, HumanMessage, AIMessage, ToolMessage)
+    filtered = [m for m in raw_messages if isinstance(m, supported_types)]
+
+    # FILTRE 2 : Limiter le contexte pour ne pas dépasser la fenêtre Ollama
+    # On garde les 30 derniers messages (environ 20K tokens max).
+    # Cela évite les réponses vides quand le contexte est trop long.
+    MAX_CONTEXT_MESSAGES = 30
+    if len(filtered) > MAX_CONTEXT_MESSAGES:
+        filtered = filtered[-MAX_CONTEXT_MESSAGES:]
+        # S'assurer qu'on ne coupe pas au milieu d'un échange outil
+        # (un ToolMessage doit toujours être précédé d'un AIMessage avec tool_calls)
+        while filtered and isinstance(filtered[0], ToolMessage):
+            filtered = filtered[1:]
 
     # Le prompt système est toujours le premier message
-    all_messages = [SystemMessage(content=system_prompt)] + list(messages)
-
-    # --- Routage multi-modèles ---
-    # Choisit le modèle approprié selon la complexité de la requête
-    model = _choose_model(dict(state))
+    all_messages = [SystemMessage(content=system_prompt)] + filtered
 
     # --- Invocation async du LLM ---
-    # ainvoke() permet au streaming via astream_events() de capturer
-    # les tokens individuels émis par le LLM en temps réel
-    llm = _get_llm(model)
+    llm = _get_llm()
     response = await llm.ainvoke(all_messages)
 
     # --- Mise à jour de l'état ---
-    # On incrémente le compteur d'interactions (pour la réflexion)
     current_count = state.get("interaction_count", 0)
 
     return {
-        "messages": [response],  # Ajouté aux messages existants via operator.add
+        "messages": [response],
         "interaction_count": current_count + 1,
     }
 
 
-def reflection_node(state: AgentState) -> dict:
+async def reflection_node(state: AgentState) -> dict:
     """Noeud REFLECTION : analyse les interactions et extrait des leçons.
 
     Déclenché périodiquement selon REFLECTION_FREQUENCY. Appelle le module
@@ -270,7 +277,7 @@ def reflection_node(state: AgentState) -> dict:
         L'état avec le compteur d'interactions remis à zéro.
     """
     global _memory_store
-    result = reflect_on_interactions(state, _memory_store)
+    result = await reflect_on_interactions(state, _memory_store)
 
     return {"interaction_count": result.get("interaction_count", 0)}
 
