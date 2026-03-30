@@ -120,6 +120,7 @@ def _get_llm(model: str | None = None, tools: list | None = None):
         temperature=OLLAMA_TEMPERATURE,
         num_predict=OLLAMA_MAX_TOKENS,
         repeat_penalty=1.2,
+        reasoning=False,  # Désactiver le mode thinking de qwen3 pour l'agent
     )
 
     bound_tools = tools if tools is not None else ALL_TOOLS
@@ -229,12 +230,20 @@ async def agent_node(state: AgentState) -> dict:
         et le compteur incrémenté.
     """
     from langchain_core.messages import ToolMessage
+    from tools.task_status import task_start, task_end
 
     # --- Sélection du spécialiste ---
     specialist_key = state.get("current_specialist", "general")
     specialist = SPECIALISTS.get(specialist_key, SPECIALISTS["general"])
     specialist_tools = specialist["tools"]  # None = ALL_TOOLS
     specialist_prompt = specialist["prompt"]
+
+    import logging
+    _agent_logger = logging.getLogger(__name__)
+    tool_count = len(specialist_tools) if specialist_tools else len(ALL_TOOLS)
+    _agent_logger.info(
+        f"Agent: spécialiste={specialist['name']}, outils={tool_count}"
+    )
 
     # --- Construction du prompt système ---
     recalled = state.get("recalled_memories", "")
@@ -245,9 +254,21 @@ async def agent_node(state: AgentState) -> dict:
     # --- Préparation des messages pour le LLM ---
     raw_messages = list(state["messages"])
 
+    # Absorber les SystemMessages de directive (orchestrateur) dans le system prompt
+    # au lieu de les laisser comme messages séparés
+    directives = []
+    user_messages = []
+    for m in raw_messages:
+        if isinstance(m, SystemMessage) and "[DIRECTIVE]" in (m.content or ""):
+            directives.append(m.content)
+        else:
+            user_messages.append(m)
+    if directives:
+        system_prompt += "\n\n" + "\n".join(directives)
+
     # FILTRE 1 : Ne garder que les types supportés par Ollama
     supported_types = (SystemMessage, HumanMessage, AIMessage, ToolMessage)
-    filtered = [m for m in raw_messages if isinstance(m, supported_types)]
+    filtered = [m for m in user_messages if isinstance(m, supported_types)]
 
     # FILTRE 2 : Limiter le contexte (30 messages max)
     MAX_CONTEXT_MESSAGES = 30
@@ -256,11 +277,112 @@ async def agent_node(state: AgentState) -> dict:
         while filtered and isinstance(filtered[0], ToolMessage):
             filtered = filtered[1:]
 
+    # Un seul SystemMessage en tête — pas de SystemMessage isolés dans le corps
     all_messages = [SystemMessage(content=system_prompt)] + filtered
 
     # --- Invocation async du LLM avec outils du spécialiste ---
+    # Extraire un résumé du dernier message humain pour le task tracking
+    _last_user = ""
+    for _m in reversed(filtered):
+        if isinstance(_m, HumanMessage):
+            _last_user = (_m.content if isinstance(_m.content, str) else str(_m.content))[:80]
+            break
+    task_start(f"{specialist['name']}", detail=_last_user)
+
     llm = _get_llm(tools=specialist_tools)
     response = await llm.ainvoke(all_messages)
+
+    # --- Anti-passivité : détecter refus ou questions au lieu d'agir ---
+    # EXCEPTION : pour les salutations simples, une réponse textuelle est NORMALE
+    _GREETING_PATTERNS = [
+        "bonjour", "salut", "hello", "hey", "coucou", "bonsoir",
+        "hi joshua", "bonjour joshua", "salut joshua",
+        "comment vas-tu", "comment tu vas", "ça va",
+    ]
+    _last_user_msg = ""
+    for _m in reversed(list(state["messages"])):
+        if isinstance(_m, HumanMessage):
+            _last_user_msg = (_m.content if isinstance(_m.content, str) else str(_m.content)).lower().strip()
+            break
+    _is_greeting = any(g in _last_user_msg for g in _GREETING_PATTERNS) and len(_last_user_msg) < 80
+
+    if (isinstance(response, AIMessage)
+            and response.content
+            and not response.tool_calls
+            and not _is_greeting):
+        text = response.content if isinstance(response.content, str) else str(response.content)
+        text_lower = text.lower()
+
+        # Log la réponse textuelle complète pour diagnostic
+        _agent_logger.info(
+            f"Agent: réponse texte de {specialist['name']} ({len(text)} car): "
+            f"{text[:200]}{'...' if len(text) > 200 else ''}"
+        )
+
+        # Détection de texte non-français (hébreu, arabe, chinois, etc.)
+        import re
+        _non_latin_ratio = len(re.findall(r'[^\x00-\x7F\xC0-\xFF]', text)) / max(len(text), 1)
+        if _non_latin_ratio > 0.3:
+            _agent_logger.warning(
+                f"Agent: texte non-latin détecté ({_non_latin_ratio:.0%}), régénération en français."
+            )
+            # Ajouter une instruction de langue et ré-invoquer
+            all_messages.append(AIMessage(content=text))
+            all_messages.append(HumanMessage(content="IMPORTANT: Réponds UNIQUEMENT en français. Reformule ta réponse précédente en français."))
+            response = await llm.ainvoke(all_messages)
+
+        # Patterns de passivité (questions) ET de refus
+        _PASSIVE_PATTERNS = [
+            "que dirais-tu", "comment te semble", "voulez-vous que",
+            "si vous souhaitez", "quel sujet", "qu'en penses-tu",
+            "pourriez-vous", "pouvez-vous me préciser", "souhaitez-vous",
+            "que souhaitez", "puis-je vous aider", "que puis-je faire",
+            "n'hésitez pas", "veuillez préciser",
+            # Patterns de refus
+            "je ne peux pas", "je suis désolé", "je suis desole",
+            "pas en mesure", "mes limites", "limitations",
+            "pas développer de nouveaux outils",
+            "sans autorisation", "sans interfaces",
+            "je ne suis pas capable", "il m'est impossible",
+            "pas autorisé", "pas possible pour moi",
+            "sécurité et de confidentialité",
+            "pour toute autre demande",
+        ]
+
+        is_passive = any(p in text_lower for p in _PASSIVE_PATTERNS)
+
+        if is_passive:
+            import logging
+            logging.getLogger(__name__).warning(
+                f"Anti-passivité: réponse passive détectée du {specialist_key}Agent. "
+                f"Forçage d'un tool_call adapté au spécialiste."
+            )
+            # Forcer un tool_call adapté au spécialiste actif
+            from langchain_core.messages import AIMessage as _AIMessage
+            _FORCED_ACTIONS = {
+                "research": {"name": "web_search", "args": {"query": "dernières découvertes scientifiques 2026"}},
+                "coder": {"name": "list_directory_tree", "args": {"dir_path": ".", "max_depth": 3}},
+                "system": {"name": "run_command", "args": {"command": "echo Systeme pret"}},
+                "memory": {"name": "recall_memory", "args": {"query": "derniers souvenirs"}},
+                "general": {"name": "web_search", "args": {"query": "dernières découvertes scientifiques 2026"}},
+            }
+            action = _FORCED_ACTIONS.get(specialist_key, _FORCED_ACTIONS["general"])
+            forced_response = _AIMessage(
+                content="",
+                tool_calls=[{
+                    "id": "forced_action_001",
+                    "name": action["name"],
+                    "args": action["args"],
+                }],
+            )
+            response = forced_response
+
+    # --- Tracking de fin de tâche ---
+    if isinstance(response, AIMessage) and response.tool_calls:
+        tool_names = ", ".join(tc["name"] for tc in response.tool_calls)
+        task_end(f"{specialist['name']}", result=f"→ {tool_names}")
+    else:
+        task_end(f"{specialist['name']}", result="réponse texte")
 
     # --- Mise à jour de l'état ---
     current_count = state.get("interaction_count", 0)

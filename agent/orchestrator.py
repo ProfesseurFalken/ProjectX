@@ -31,6 +31,11 @@ _FREEDOM_KEYWORDS = [
     "fais le toi", "fais-le toi", "à toi de jouer", "a toi de jouer",
     "ce que tu souhaites", "ce que tu veux", "comme tu veux",
     "je te laisse", "décide toi", "decide toi",
+    "maniere autonome", "manière autonome", "toute ma confiance",
+    "tu as carte blanche", "carte blanche", "fais le de",
+    "agis librement", "totale liberté", "totale liberte",
+    "surprends-moi", "surprends moi", "étonne-moi", "etonne-moi",
+    "tu decides", "tu décides", "choisis pour moi",
 ]
 
 # Prompt pour le routage LLM (utilisé quand l'heuristique n'est pas confiante)
@@ -142,6 +147,11 @@ async def orchestrator_node(state: "AgentState") -> dict:
     # Étape 2 : Si pas confiant, demander au LLM
     if confidence < 0.6:
         specialist = await _llm_route(query)
+
+    import logging
+    logging.getLogger(__name__).info(
+        f"Orchestrator: '{query[:60]}...' → {specialist} (confiance={confidence:.2f})"
+    )
 
     result: dict = {"current_specialist": specialist}
 

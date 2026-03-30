@@ -19,7 +19,11 @@ Date    : 2026-03-28
 """
 
 import uuid
+import subprocess
+import time
+import logging
 
+import httpx
 import chainlit as cl
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
@@ -27,6 +31,51 @@ from langgraph.errors import GraphRecursionError
 
 from agent.graph import create_agent_graph
 from agent.sessions import save_session, get_recent_sessions
+from config import OLLAMA_BASE_URL
+
+logger = logging.getLogger(__name__)
+
+
+def _ensure_ollama_running() -> None:
+    """Vérifie qu'Ollama est lancé, et le démarre sinon."""
+    try:
+        resp = httpx.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=3)
+        if resp.status_code == 200:
+            logger.info("Ollama: déjà en cours d'exécution.")
+            return
+    except (httpx.ConnectError, httpx.TimeoutException):
+        pass
+
+    logger.info("Ollama: non détecté, lancement automatique...")
+    try:
+        subprocess.Popen(
+            ["ollama", "serve"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except FileNotFoundError:
+        logger.error(
+            "Ollama: introuvable dans le PATH. "
+            "Installe-le depuis https://ollama.com"
+        )
+        return
+
+    # Attendre qu'Ollama soit prêt (max ~15s)
+    for i in range(15):
+        time.sleep(1)
+        try:
+            resp = httpx.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=2)
+            if resp.status_code == 200:
+                logger.info(f"Ollama: prêt après {i + 1}s.")
+                return
+        except (httpx.ConnectError, httpx.TimeoutException):
+            pass
+    logger.warning("Ollama: timeout au démarrage — le serveur n'a pas répondu.")
+
+
+# Lancer Ollama au chargement du module (avant que Chainlit n'accepte les connexions)
+_ensure_ollama_running()
 
 # Type pour l'annotation du graphe compilé
 from langgraph.graph.state import CompiledStateGraph

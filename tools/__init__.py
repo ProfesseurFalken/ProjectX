@@ -33,6 +33,7 @@ from tools.file_manager import (
     read_file,
     write_file,
     list_directory,
+    list_directory_tree,
     create_directory,
     delete_file,
     move_file,
@@ -42,6 +43,7 @@ from tools.email_tool import send_email
 from tools.code_executor import execute_python
 from tools.rag_tool import rag_index_documents, rag_search
 from tools.memory_tool import save_memory, recall_memory
+from tools.task_status import get_task_status
 
 # =============================================================================
 # LISTE COMPLÈTE DES OUTILS
@@ -64,6 +66,7 @@ ALL_TOOLS = [
     read_file,              # Lire le contenu d'un fichier
     write_file,             # Écrire du contenu dans un fichier
     list_directory,         # Lister le contenu d'un répertoire
+    list_directory_tree,    # Lister récursivement une arborescence
     create_directory,       # Créer un répertoire
     delete_file,            # Supprimer un fichier ou dossier
     move_file,              # Déplacer/renommer un fichier
@@ -82,4 +85,7 @@ ALL_TOOLS = [
     # --- Outils Mémoire Explicite ---
     save_memory,            # Sauvegarder un fait/information en mémoire permanente
     recall_memory,          # Retrouver des informations mémorisées
+
+    # --- Outils Statut ---
+    get_task_status,        # Voir les tâches en cours et l'historique
 ]

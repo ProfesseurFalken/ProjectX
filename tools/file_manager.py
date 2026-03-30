@@ -260,3 +260,69 @@ def move_file(source: str, destination: str) -> str:
         return f"Erreur : permission refusée pour déplacer '{source}'."
     except Exception as e:
         return f"Erreur lors du déplacement de '{source}' : {str(e)}"
+
+
+@tool
+def list_directory_tree(dir_path: str = ".", max_depth: int = 3) -> str:
+    """Liste récursivement tous les fichiers et dossiers d'une arborescence.
+
+    Utilise cette fonction pour explorer un projet complet et voir toute
+    la structure de fichiers, y compris les sous-dossiers. Idéal pour
+    inspecter un projet de code.
+
+    Args:
+        dir_path: Chemin du répertoire racine à explorer. Par défaut ".".
+        max_depth: Profondeur maximale d'exploration (défaut: 3).
+
+    Returns:
+        Arborescence complète avec types et tailles, ou message d'erreur.
+    """
+    try:
+        root = Path(dir_path).resolve()
+        if not root.exists():
+            return f"Erreur : le répertoire '{dir_path}' n'existe pas."
+        if not root.is_dir():
+            return f"Erreur : '{dir_path}' n'est pas un répertoire."
+
+        _SKIP = {".venv", "__pycache__", ".git", "node_modules", ".mypy_cache", "chroma_db"}
+        lines = [f"Arborescence de '{dir_path}' (profondeur max={max_depth}) :\n"]
+        file_count = 0
+        dir_count = 0
+
+        def _walk(current: Path, prefix: str, depth: int):
+            nonlocal file_count, dir_count
+            if depth > max_depth:
+                return
+            try:
+                items = sorted(current.iterdir(), key=lambda x: (x.is_file(), x.name.lower()))
+            except PermissionError:
+                lines.append(f"{prefix}[ACCÈS REFUSÉ]")
+                return
+            for i, item in enumerate(items):
+                is_last = i == len(items) - 1
+                connector = "└── " if is_last else "├── "
+                extension = "    " if is_last else "│   "
+                if item.is_dir():
+                    if item.name in _SKIP:
+                        lines.append(f"{prefix}{connector}[DOSSIER] {item.name}/ (ignoré)")
+                        continue
+                    dir_count += 1
+                    lines.append(f"{prefix}{connector}[DOSSIER] {item.name}/")
+                    _walk(item, prefix + extension, depth + 1)
+                else:
+                    file_count += 1
+                    size = item.stat().st_size
+                    if size < 1024:
+                        size_str = f"{size} o"
+                    elif size < 1024 * 1024:
+                        size_str = f"{size / 1024:.1f} Ko"
+                    else:
+                        size_str = f"{size / (1024 * 1024):.1f} Mo"
+                    lines.append(f"{prefix}{connector}[FICHIER] {item.name} ({size_str})")
+
+        _walk(root, "", 0)
+        lines.append(f"\nTotal : {dir_count} dossier(s), {file_count} fichier(s)")
+        return "\n".join(lines)
+
+    except Exception as e:
+        return f"Erreur lors de l'exploration de '{dir_path}' : {str(e)}"
