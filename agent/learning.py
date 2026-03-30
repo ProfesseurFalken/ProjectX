@@ -242,6 +242,12 @@ async def reflect_on_interactions(state, store) -> dict:
     if len(messages_text.strip()) < 50:
         return {**state, "interaction_count": 0}
 
+    # --- Injection du feedback utilisateur dans la réflexion ---
+    from tools.feedback import get_recent_feedback_summary
+    feedback_summary = get_recent_feedback_summary(limit=20)
+    if feedback_summary:
+        messages_text += f"\n{feedback_summary}\n"
+
     try:
         # --- Appel au LLM pour l'analyse ---
         # On utilise une instance séparée du LLM avec une température basse

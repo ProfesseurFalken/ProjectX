@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from agent.graph import AgentState
 
 
-# Mots-clés de liberté/exploration → ResearchAgent par défaut
+# Mots-clés de liberté/exploration → dépend du contexte
 _FREEDOM_KEYWORDS = [
     "fais ce que tu veux", "libre de", "choisis toi", "choisis un sujet",
     "explore internet", "consulte internet", "navigue sur", "apprends",
@@ -36,6 +36,15 @@ _FREEDOM_KEYWORDS = [
     "agis librement", "totale liberté", "totale liberte",
     "surprends-moi", "surprends moi", "étonne-moi", "etonne-moi",
     "tu decides", "tu décides", "choisis pour moi",
+]
+
+# Mots-clés qui orientent la liberté vers le code plutôt que la recherche
+_CODE_CONTEXT_KEYWORDS = [
+    "code", "améliorer", "ameliorer", "ajouter", "fonctionnalit",
+    "modifier", "refactor", "optimis", "implément", "implement",
+    "développ", "develop", "créer", "creer", "écrire", "ecrire",
+    "corriger", "bug", "fix", "modèle", "modele", "agent",
+    "outil", "tool", "module", "projet", "script",
 ]
 
 # Prompt pour le routage LLM (utilisé quand l'heuristique n'est pas confiante)
@@ -70,8 +79,11 @@ def _heuristic_route(query: str) -> tuple[str, float]:
     """
     query_lower = query.lower()
 
-    # Vérifier les mots-clés de liberté → research
+    # Vérifier les mots-clés de liberté → contexte détermine le spécialiste
     if any(kw in query_lower for kw in _FREEDOM_KEYWORDS):
+        # Si le contexte mentionne du code/projet → coder, sinon research
+        if any(kw in query_lower for kw in _CODE_CONTEXT_KEYWORDS):
+            return "coder", 1.0
         return "research", 1.0
 
     # Compter les matchs par spécialiste
@@ -158,14 +170,25 @@ async def orchestrator_node(state: "AgentState") -> dict:
     # Injection de directive pour les demandes de liberté
     query_lower = query.lower()
     if any(kw in query_lower for kw in _FREEDOM_KEYWORDS):
-        result["messages"] = [SystemMessage(content=(
-            "[DIRECTIVE] L'utilisateur te donne carte blanche. "
-            "Tu DOIS agir MAINTENANT sans poser de question. "
-            "Étape 1 : Appelle web_search avec un sujet de TON choix "
-            "(actualité tech, science, découverte récente...). "
-            "Étape 2 : Appelle scrape_webpage sur le meilleur résultat. "
-            "Étape 3 : Fais une synthèse passionnante de ce que tu as lu. "
-            "NE DEMANDE PAS L'AVIS de l'utilisateur. AGIS."
-        ))]
+        is_code_context = any(kw in query_lower for kw in _CODE_CONTEXT_KEYWORDS)
+        if is_code_context:
+            result["messages"] = [SystemMessage(content=(
+                "[DIRECTIVE] L'utilisateur te donne carte blanche pour améliorer le code. "
+                "Tu DOIS agir MAINTENANT sans poser de question. "
+                "Étape 1 : Appelle list_directory_tree pour voir l'arborescence du projet. "
+                "Étape 2 : Appelle read_file sur les fichiers clés. "
+                "Étape 3 : Identifie les améliorations possibles et implémente-les avec write_file. "
+                "NE DEMANDE PAS L'AVIS de l'utilisateur. CODE."
+            ))]
+        else:
+            result["messages"] = [SystemMessage(content=(
+                "[DIRECTIVE] L'utilisateur te donne carte blanche. "
+                "Tu DOIS agir MAINTENANT sans poser de question. "
+                "Étape 1 : Appelle web_search avec un sujet de TON choix "
+                "(actualité tech, science, découverte récente...). "
+                "Étape 2 : Appelle scrape_webpage sur le meilleur résultat. "
+                "Étape 3 : Fais une synthèse passionnante de ce que tu as lu. "
+                "NE DEMANDE PAS L'AVIS de l'utilisateur. AGIS."
+            ))]
 
     return result

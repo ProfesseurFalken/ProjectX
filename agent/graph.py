@@ -316,7 +316,7 @@ async def agent_node(state: AgentState) -> dict:
         # Log la réponse textuelle complète pour diagnostic
         _agent_logger.info(
             f"Agent: réponse texte de {specialist['name']} ({len(text)} car): "
-            f"{text[:200]}{'...' if len(text) > 200 else ''}"
+            f"{text[:2000]}{'...' if len(text) > 2000 else ''}"
         )
 
         # Détection de texte non-français (hébreu, arabe, chinois, etc.)
@@ -331,14 +331,13 @@ async def agent_node(state: AgentState) -> dict:
             all_messages.append(HumanMessage(content="IMPORTANT: Réponds UNIQUEMENT en français. Reformule ta réponse précédente en français."))
             response = await llm.ainvoke(all_messages)
 
-        # Patterns de passivité (questions) ET de refus
-        _PASSIVE_PATTERNS = [
-            "que dirais-tu", "comment te semble", "voulez-vous que",
-            "si vous souhaitez", "quel sujet", "qu'en penses-tu",
-            "pourriez-vous", "pouvez-vous me préciser", "souhaitez-vous",
-            "que souhaitez", "puis-je vous aider", "que puis-je faire",
-            "n'hésitez pas", "veuillez préciser",
-            # Patterns de refus
+        # --- Anti-passivité intelligente ---
+        # Réponses longues (>500 car) = vraie analyse → ne PAS bloquer
+        # Seules les réponses courtes et vides d'action sont suspectes
+        _MIN_REAL_RESPONSE = 500
+
+        # Patterns de REFUS pur (toujours bloqués, même sur réponses longues)
+        _REFUSAL_PATTERNS = [
             "je ne peux pas", "je suis désolé", "je suis desole",
             "pas en mesure", "mes limites", "limitations",
             "pas développer de nouveaux outils",
@@ -346,16 +345,29 @@ async def agent_node(state: AgentState) -> dict:
             "je ne suis pas capable", "il m'est impossible",
             "pas autorisé", "pas possible pour moi",
             "sécurité et de confidentialité",
+        ]
+
+        # Patterns de passivité (questions inutiles) — seulement sur réponses COURTES
+        _PASSIVE_PATTERNS = [
+            "que dirais-tu", "comment te semble", "voulez-vous que",
+            "si vous souhaitez", "quel sujet", "qu'en penses-tu",
+            "pourriez-vous", "pouvez-vous me préciser", "souhaitez-vous",
+            "que souhaitez", "puis-je vous aider", "que puis-je faire",
+            "n'hésitez pas", "veuillez préciser",
             "pour toute autre demande",
         ]
 
-        is_passive = any(p in text_lower for p in _PASSIVE_PATTERNS)
+        is_refusal = any(p in text_lower for p in _REFUSAL_PATTERNS)
+        is_passive = (
+            len(text) < _MIN_REAL_RESPONSE
+            and any(p in text_lower for p in _PASSIVE_PATTERNS)
+        )
 
-        if is_passive:
-            import logging
-            logging.getLogger(__name__).warning(
-                f"Anti-passivité: réponse passive détectée du {specialist_key}Agent. "
-                f"Forçage d'un tool_call adapté au spécialiste."
+        if is_refusal or is_passive:
+            reason = "refus" if is_refusal else "passivité"
+            _agent_logger.warning(
+                f"Anti-passivité: {reason} détecté du {specialist_key}Agent "
+                f"({len(text)} car). Forçage d'un tool_call."
             )
             # Forcer un tool_call adapté au spécialiste actif
             from langchain_core.messages import AIMessage as _AIMessage

@@ -32,6 +32,7 @@ from langgraph.errors import GraphRecursionError
 from agent.graph import create_agent_graph
 from agent.sessions import save_session, get_recent_sessions
 from config import OLLAMA_BASE_URL
+from tools.feedback import store_feedback
 
 logger = logging.getLogger(__name__)
 
@@ -406,18 +407,43 @@ async def on_message(message: cl.Message):
         except Exception:
             pass
 
-    # --- Affichage de la réponse finale ---
-    # Si le streaming a déjà affiché la réponse, on ne la réaffiche pas
+    # --- Affichage de la réponse finale + boutons feedback ---
+    _feedback_actions = [
+        cl.Action(name="feedback_positive", payload={"rating": "positive"}, label="👍"),
+        cl.Action(name="feedback_negative", payload={"rating": "negative"}, label="👎"),
+    ]
+
     if streaming_msg and final_response.strip():
-        # La réponse a déjà été streamée dans le chat — rien à faire
-        pass
+        # La réponse a déjà été streamée — ajouter les boutons
+        streaming_msg.actions = _feedback_actions
+        await streaming_msg.update()
     elif final_response.strip():
-        await cl.Message(content=final_response).send()
+        await cl.Message(content=final_response, actions=_feedback_actions).send()
     else:
         # Si pas de réponse textuelle (ne devrait pas arriver), message par défaut
         await cl.Message(
             content="J'ai terminé l'exécution, mais je n'ai pas de réponse textuelle à afficher."
         ).send()
+
+    # Stocker le contexte pour le feedback dans la session
+    cl.user_session.set("last_query", message.content)
+    cl.user_session.set("last_response", final_response[:500])
+    cl.user_session.set("last_specialist", input_data.get("current_specialist", ""))
+
+
+@cl.action_callback("feedback_positive")
+@cl.action_callback("feedback_negative")
+async def on_feedback(action: cl.Action):
+    """Enregistre le feedback utilisateur (👍 ou 👎)."""
+    rating = action.payload.get("rating", "positive")  # type: ignore[union-attr]
+    query = cl.user_session.get("last_query", "") or ""
+    response = cl.user_session.get("last_response", "") or ""
+    specialist = cl.user_session.get("last_specialist", "") or ""
+
+    store_feedback(rating, query, response, specialist)
+
+    label = "👍" if rating == "positive" else "👎"
+    await cl.Message(content=f"Merci pour ton retour {label} !").send()
 
 
 # =============================================================================
